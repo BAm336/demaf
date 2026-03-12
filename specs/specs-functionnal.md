@@ -65,7 +65,7 @@ L'auto-refresh est partagé entre les deux onglets.
   - Timestamp (`DEO_DATE_INSERTION` / `DEI_DATE_RECEPTION`)
   - Type de message (`DEO_TYPE_MESSAGE` / `DEI_TYPE_MESSAGE`)
   - Statut (`DEO_STATUS` / `DEI_STATUS`)
-  - Compteur de rejeux manuels : **hardcodé à 0 en V1** (colonne absente des tables)
+  - Compteur de rejeux manuels (`nbRejeux`)
 - Pagination (50-100 lignes par page)
 - Tri par timestamp (plus récents en premier)
 
@@ -91,8 +91,7 @@ Le rejeu consiste simplement à :
 
 **Pas de publication directe dans RabbitMQ** : on s'appuie sur les mécanismes existants.
 
-> **V1** : Pas de colonne `rejeu_manuel` dans les tables — le compteur est affiché hardcodé à `0`.
-> L'incrémentation d'un compteur de rejeux est reportée en phase ultérieure (nécessite un ALTER TABLE).
+> Le compteur de rejeux est géré par le sidecar.
 
 #### Gestion des droits
 - **V1** : Aucune authentification — application accessible librement (réseau interne)

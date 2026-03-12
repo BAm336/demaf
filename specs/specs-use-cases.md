@@ -52,7 +52,7 @@ Développer une application de monitoring permettant de **visualiser à la deman
   - Timestamp (`DEO_DATE_INSERTION` / `DEI_DATE_RECEPTION`)
   - Type de message (`DEO_TYPE_MESSAGE` / `DEI_TYPE_MESSAGE`)
   - Statut (`DEO_STATUS` / `DEI_STATUS`)
-  - Compteur de rejeux manuels : **hardcodé à 0 en V1** (colonne absente)
+  - Compteur de rejeux manuels (`nbRejeux`)
 - Pagination (50-100 lignes par page)
 - Tri par timestamp (plus récents en premier)
 
@@ -78,7 +78,7 @@ Le rejeu consiste simplement à :
 
 **Pas de publication directe dans RabbitMQ** : on s'appuie sur les mécanismes existants.
 
-> **V1** : Pas de colonne `rejeu_manuel` — le compteur est affiché hardcodé à `0`. L'incrémentation est reportée en phase ultérieure.
+> Le compteur de rejeux est géré par le sidecar.
 
 #### Gestion des droits
 - **V1** : Aucune authentification — application accessible librement (réseau interne)
@@ -276,7 +276,7 @@ Le champ `role` indique quelles tables sont présentes sur cette datasource :
 **Scénario nominal (clic sur une ligne)** :
 1. L'utilisateur clique n'importe où sur la ligne d'une application
 2. Le système navigue vers la liste des messages de cette application avec le filtre `EN_ERREUR` pré-sélectionné
-3. Pour chaque message : identifiant, user, timestamp, type, statut, nb rejeux (0 en V1)
+3. Pour chaque message : identifiant, user, timestamp, type, statut, nb rejeux
 4. L'utilisateur peut modifier les filtres, paginer, trier
 
 **Scénario alternatif (clic sur le compteur EN_ERREUR)** :

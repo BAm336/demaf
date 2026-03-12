@@ -1,0 +1,717 @@
+openapi: 3.0.3
+
+info:
+  title: DEMAF API
+  description: >
+    API REST exposée par le backend DEMAF au frontend Vue.js.
+    Le backend agrège les appels aux sidecars et renvoie une vue unifiée.
+  version: 0.1.0
+
+servers:
+  - url: /api
+    description: Chemin de base du backend DEMAF
+
+tags:
+  - name: applications
+    description: Liste des applications configurées
+  - name: summary
+    description: Compteurs agrégés — vue dashboard
+  - name: message-types
+    description: Vue par type de message
+  - name: messages
+    description: Consultation des messages d'une application
+  - name: replay
+    description: Rejeu de messages en erreur
+
+paths:
+
+  # ── Applications ──────────────────────────────────────────────────────────────
+
+  /applications:
+    get:
+      operationId: getApplications
+      summary: Liste des applications configurées dans DEMAF
+      tags: [applications]
+      responses:
+        "200":
+          description: Liste retournée avec succès
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/ApplicationInfo"
+              example:
+                - name: App-Commandes
+                  displayName: App Commandes
+                  role: producer
+                  connectionError: false
+                - name: App-Facturation
+                  displayName: App Facturation
+                  role: both
+                  connectionError: false
+                - name: App-RH
+                  displayName: App RH
+                  role: both
+                  connectionError: true
+
+  # ── Summary ───────────────────────────────────────────────────────────────────
+
+  /inbox-outbox/summary:
+    get:
+      operationId: getSummary
+      summary: >
+        Compteurs par statut pour toutes les applications (ou une seule si filtre).
+        Interroge les sidecars en parallèle.
+      tags: [summary]
+      parameters:
+        - name: application
+          in: query
+          description: Restreindre à une seule application (interroge uniquement son sidecar)
+          schema:
+            type: string
+          example: App-Facturation
+      responses:
+        "200":
+          description: >
+            Tableau retourné avec succès. Les sidecars inaccessibles apparaissent
+            avec connectionError=true ; les autres résultats sont retournés normalement.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/ApplicationSummary"
+              example:
+                - application: App-Commandes
+                  role: producer
+                  inbox: null
+                  outbox:
+                    A_TRAITER: 6
+                    EN_TRAITEMENT: 4
+                    TRAITE: 51
+                    EN_ERREUR: 3
+                  connectionError: false
+                - application: App-RH
+                  connectionError: true
+
+  # ── Types de messages ─────────────────────────────────────────────────────────
+
+  /inbox-outbox/message-types/summary:
+    get:
+      operationId: getMessageTypesSummary
+      summary: >
+        Compteurs agrégés par type de message, toutes applications confondues.
+        Interroge tous les sidecars en parallèle.
+      tags: [message-types]
+      responses:
+        "200":
+          description: >
+            Liste triée alphabétiquement par type.
+            partialData=true si au moins un sidecar était inaccessible.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/MessageTypeSummary"
+              example:
+                - type: ORDER_CREATED
+                  A_TRAITER: 17
+                  EN_TRAITEMENT: 5
+                  TRAITE: 150
+                  EN_ERREUR: 31
+                - type: INVOICE_SENT
+                  A_TRAITER: 4
+                  EN_TRAITEMENT: 2
+                  TRAITE: 9
+                  EN_ERREUR: 11
+
+  /inbox-outbox/message-types/{type}/summary:
+    get:
+      operationId: getMessageTypeSummary
+      summary: >
+        Flux complet d'un type de message : producteurs (outbox) et consommateurs (inbox),
+        avec leurs compteurs par statut.
+      tags: [message-types]
+      parameters:
+        - $ref: "#/components/parameters/messageType"
+      responses:
+        "200":
+          description: Flux retourné avec succès
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MessageTypeDetail"
+              example:
+                type: ORDER_CREATED
+                partialData: false
+                producers:
+                  - application: App-Commandes
+                    A_TRAITER: 6
+                    EN_TRAITEMENT: 4
+                    TRAITE: 51
+                    EN_ERREUR: 3
+                consumers:
+                  - application: App-Facturation
+                    A_TRAITER: 14
+                    EN_TRAITEMENT: 6
+                    TRAITE: 12
+                    EN_ERREUR: 23
+                  - application: App-Stock
+                    A_TRAITER: 3
+                    EN_TRAITEMENT: 12
+                    TRAITE: 98
+                    EN_ERREUR: 2
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  # ── Types de messages d'une application ───────────────────────────────────────
+
+  /inbox-outbox/applications/{appName}/message-types:
+    get:
+      operationId: getApplicationMessageTypes
+      summary: Types de messages distincts présents dans les tables de l'application
+      tags: [message-types]
+      parameters:
+        - $ref: "#/components/parameters/appName"
+      responses:
+        "200":
+          description: Types retournés avec succès
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApplicationMessageTypes"
+              example:
+                role: both
+                types:
+                  - ORDER_CREATED
+                  - INVOICE_SENT
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+
+  # ── Messages ──────────────────────────────────────────────────────────────────
+
+  /inbox-outbox/applications/{appName}/messages:
+    get:
+      operationId: getMessages
+      summary: Liste paginée des messages d'une application (métadonnées uniquement, sans payload)
+      tags: [messages]
+      parameters:
+        - $ref: "#/components/parameters/appName"
+        - name: direction
+          in: query
+          description: Filtrer sur inbox ou outbox (absent = les deux)
+          schema:
+            $ref: "#/components/schemas/Direction"
+        - name: statuses
+          in: query
+          description: Filtrer sur un ou plusieurs statuts
+          explode: true
+          schema:
+            type: array
+            items:
+              $ref: "#/components/schemas/MessageStatus"
+          example: [EN_ERREUR]
+        - name: types
+          in: query
+          description: Filtrer sur un ou plusieurs types de messages
+          explode: true
+          schema:
+            type: array
+            items:
+              type: string
+          example: [ORDER_CREATED]
+        - name: page
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            default: 1
+        - name: pageSize
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 200
+            default: 50
+      responses:
+        "200":
+          description: Liste retournée avec succès
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MessagePage"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+
+  /inbox-outbox/applications/{appName}/messages/{messageId}:
+    get:
+      operationId: getMessage
+      summary: Détail d'un message (métadonnées uniquement, sans payload)
+      tags: [messages]
+      parameters:
+        - $ref: "#/components/parameters/appName"
+        - $ref: "#/components/parameters/messageId"
+      responses:
+        "200":
+          description: Message retourné avec succès
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MessageDetail"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+
+  # ── Rejeu ─────────────────────────────────────────────────────────────────────
+
+  /inbox-outbox/applications/{appName}/messages/{messageId}/replay:
+    post:
+      operationId: replaySingle
+      summary: Rejouer un message (SET statut = 'A_TRAITER')
+      tags: [replay]
+      parameters:
+        - $ref: "#/components/parameters/appName"
+        - $ref: "#/components/parameters/messageId"
+      responses:
+        "200":
+          description: >
+            Message remis en file. Retourne le message avec son statut mis à jour
+            pour permettre la mise à jour optimiste de l'interface.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MessageDetail"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          description: Le message n'est pas dans un état rejouable
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+
+  /inbox-outbox/applications/{appName}/messages/replay:
+    post:
+      operationId: replayBatch
+      summary: Rejouer une sélection de messages par leurs identifiants
+      tags: [replay]
+      parameters:
+        - $ref: "#/components/parameters/appName"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ReplayBatchRequest"
+            example:
+              ids:
+                - MSG-00042
+                - MSG-00043
+      responses:
+        "200":
+          description: >
+            Messages remis en file. Retourne le nombre de messages rejoués et
+            la liste des messages mis à jour pour la mise à jour optimiste de l'interface.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ReplayBatchResult"
+              example:
+                replayed: 2
+                messages:
+                  - id: MSG-00042
+                    application: App-Facturation
+                    direction: INBOX
+                    type: ORDER_CREATED
+                    utilisateur: user.dupont
+                    timestamp: "2026-03-01T10:23:00Z"
+                    statut: A_TRAITER
+                    nbRejeux: 1
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+
+  /inbox-outbox/applications/{appName}/messages/replay-by-filter:
+    post:
+      operationId: replayByFilter
+      summary: >
+        Rejouer tous les messages correspondant aux filtres (UPDATE ... WHERE).
+        Aucune limite de pagination — tous les messages correspondants sont traités.
+      tags: [replay]
+      parameters:
+        - $ref: "#/components/parameters/appName"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ReplayByFilterRequest"
+            example:
+              statuses: [EN_ERREUR]
+              types: [ORDER_CREATED]
+      responses:
+        "200":
+          description: Messages remis en file — retourne le nombre de messages rejoués
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ReplayResult"
+              example:
+                replayed: 345
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+
+# ── Composants ────────────────────────────────────────────────────────────────
+
+components:
+
+  parameters:
+    appName:
+      name: appName
+      in: path
+      required: true
+      description: Nom de l'application tel que configuré dans DEMAF
+      schema:
+        type: string
+      example: App-Facturation
+
+    messageId:
+      name: messageId
+      in: path
+      required: true
+      description: Identifiant du message (DEO_IDENTIFIANT ou DEI_TYPE_IDENTIFIANT)
+      schema:
+        type: string
+      example: MSG-00042
+
+    messageType:
+      name: type
+      in: path
+      required: true
+      description: Type fonctionnel du message
+      schema:
+        type: string
+      example: ORDER_CREATED
+
+  schemas:
+
+    # ── Énumérations ────────────────────────────────────────────────────────────
+
+    MessageStatus:
+      type: string
+      enum: [A_TRAITER, EN_TRAITEMENT, TRAITE, EN_ERREUR]
+
+    Direction:
+      type: string
+      enum: [INBOX, OUTBOX]
+      description: Sens du message — majuscules pour cohérence avec les noms de tables
+
+    Role:
+      type: string
+      enum: [both, producer, consumer]
+      description: >
+        Rôle de l'application : both = inbox + outbox, producer = outbox uniquement,
+        consumer = inbox uniquement.
+
+    # ── Applications ────────────────────────────────────────────────────────────
+
+    ApplicationInfo:
+      type: object
+      required: [name, displayName, role, connectionError]
+      properties:
+        name:
+          type: string
+          description: Identifiant technique de l'application (clé de routage vers le sidecar)
+        displayName:
+          type: string
+          description: Libellé affiché dans l'interface
+        role:
+          $ref: "#/components/schemas/Role"
+        connectionError:
+          type: boolean
+          description: true si le sidecar de cette application est actuellement inaccessible
+
+    # ── Summary ─────────────────────────────────────────────────────────────────
+
+    StatusCounts:
+      type: object
+      description: Nombre de messages par statut
+      required: [A_TRAITER, EN_TRAITEMENT, TRAITE, EN_ERREUR]
+      properties:
+        A_TRAITER:
+          type: integer
+          minimum: 0
+        EN_TRAITEMENT:
+          type: integer
+          minimum: 0
+        TRAITE:
+          type: integer
+          minimum: 0
+        EN_ERREUR:
+          type: integer
+          minimum: 0
+
+    ApplicationSummary:
+      type: object
+      required: [application, connectionError]
+      description: >
+        Si connectionError=true, seuls application et connectionError sont garantis présents.
+      properties:
+        application:
+          type: string
+        role:
+          $ref: "#/components/schemas/Role"
+        inbox:
+          description: "null si role=producer ou sidecar inaccessible"
+          nullable: true
+          allOf:
+            - $ref: "#/components/schemas/StatusCounts"
+        outbox:
+          description: "null si role=consumer ou sidecar inaccessible"
+          nullable: true
+          allOf:
+            - $ref: "#/components/schemas/StatusCounts"
+        connectionError:
+          type: boolean
+
+    # ── Types de messages ────────────────────────────────────────────────────────
+
+    MessageTypeSummary:
+      type: object
+      required: [type, A_TRAITER, EN_TRAITEMENT, TRAITE, EN_ERREUR]
+      properties:
+        type:
+          type: string
+        A_TRAITER:
+          type: integer
+          minimum: 0
+        EN_TRAITEMENT:
+          type: integer
+          minimum: 0
+        TRAITE:
+          type: integer
+          minimum: 0
+        EN_ERREUR:
+          type: integer
+          minimum: 0
+
+    MessageTypeDetail:
+      type: object
+      required: [type, partialData, producers, consumers]
+      properties:
+        type:
+          type: string
+        partialData:
+          type: boolean
+          description: true si au moins un sidecar était inaccessible lors de l'agrégation
+        producers:
+          type: array
+          description: Applications ayant ce type en OUTBOX
+          items:
+            $ref: "#/components/schemas/ApplicationTypeCounters"
+        consumers:
+          type: array
+          description: Applications ayant ce type en INBOX
+          items:
+            $ref: "#/components/schemas/ApplicationTypeCounters"
+
+    ApplicationTypeCounters:
+      type: object
+      required: [application, A_TRAITER, EN_TRAITEMENT, TRAITE, EN_ERREUR]
+      properties:
+        application:
+          type: string
+        A_TRAITER:
+          type: integer
+          minimum: 0
+        EN_TRAITEMENT:
+          type: integer
+          minimum: 0
+        TRAITE:
+          type: integer
+          minimum: 0
+        EN_ERREUR:
+          type: integer
+          minimum: 0
+
+    ApplicationMessageTypes:
+      type: object
+      required: [role, types]
+      properties:
+        role:
+          $ref: "#/components/schemas/Role"
+        types:
+          type: array
+          items:
+            type: string
+          description: Types de messages distincts présents dans les tables de l'application
+
+    # ── Messages ─────────────────────────────────────────────────────────────────
+
+    MessageSummary:
+      type: object
+      description: >
+        Métadonnées d'un message. Le champ `application` est ajouté par DEMAF
+        (absent dans la réponse sidecar). Le payload n'est jamais retourné.
+      required: [id, application, direction, type, utilisateur, timestamp, statut, nbRejeux]
+      properties:
+        id:
+          type: string
+          description: DEO_IDENTIFIANT (outbox) ou DEI_TYPE_IDENTIFIANT (inbox)
+        application:
+          type: string
+          description: Nom de l'application source, ajouté par DEMAF lors de l'agrégation
+        direction:
+          $ref: "#/components/schemas/Direction"
+        type:
+          type: string
+          description: DEO_TYPE_MESSAGE / DEI_TYPE_MESSAGE
+        utilisateur:
+          type: string
+          description: DEO_UTILISATEUR / DEI_UTILISATEUR
+        timestamp:
+          type: string
+          format: date-time
+          description: DEO_DATE_INSERTION (outbox) ou DEI_DATE_RECEPTION (inbox)
+        statut:
+          $ref: "#/components/schemas/MessageStatus"
+        nbRejeux:
+          type: integer
+          minimum: 0
+          description: Nombre de rejeux manuels effectués sur ce message, fourni par le sidecar
+
+    MessageDetail:
+      allOf:
+        - $ref: "#/components/schemas/MessageSummary"
+        - type: object
+          description: Champs supplémentaires disponibles sur le détail (outbox uniquement)
+          properties:
+            nbTentativesEnvoi:
+              type: integer
+              minimum: 0
+              nullable: true
+              description: DEO_NB_TENTATIVE_ENVOI — présent uniquement pour les messages outbox
+            datePublication:
+              type: string
+              format: date-time
+              nullable: true
+              description: DEO_DATE_PUBLICATION — présent uniquement pour les messages outbox
+
+    MessagePage:
+      type: object
+      required: [total, page, pageSize, items]
+      properties:
+        total:
+          type: integer
+          minimum: 0
+          description: Nombre total de messages correspondant aux filtres (toutes pages)
+        page:
+          type: integer
+          minimum: 1
+        pageSize:
+          type: integer
+          minimum: 1
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/MessageSummary"
+
+    # ── Rejeu ────────────────────────────────────────────────────────────────────
+
+    ReplayBatchRequest:
+      type: object
+      required: [ids]
+      properties:
+        ids:
+          type: array
+          minItems: 1
+          items:
+            type: string
+
+    ReplayByFilterRequest:
+      type: object
+      description: >
+        Tous les champs sont optionnels mais au moins un filtre doit être renseigné.
+        DEMAF transmet les filtres au sidecar qui applique un UPDATE ... WHERE côté base.
+      properties:
+        direction:
+          $ref: "#/components/schemas/Direction"
+        statuses:
+          type: array
+          minItems: 1
+          items:
+            $ref: "#/components/schemas/MessageStatus"
+        types:
+          type: array
+          minItems: 1
+          items:
+            type: string
+
+    ReplayResult:
+      type: object
+      required: [replayed]
+      properties:
+        replayed:
+          type: integer
+          minimum: 0
+          description: Nombre de messages effectivement remis en file (statut mis à A_TRAITER)
+
+    ReplayBatchResult:
+      allOf:
+        - $ref: "#/components/schemas/ReplayResult"
+        - type: object
+          required: [messages]
+          properties:
+            messages:
+              type: array
+              description: >
+                Messages mis à jour, retournés pour permettre la mise à jour optimiste
+                de l'interface sans recharger la liste complète.
+              items:
+                $ref: "#/components/schemas/MessageDetail"
+
+    # ── Erreurs ──────────────────────────────────────────────────────────────────
+
+    ErrorResponse:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: string
+          description: Message d'erreur lisible
+
+  responses:
+    BadRequest:
+      description: Paramètres invalides
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+    NotFound:
+      description: Application ou message introuvable
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+    ServiceUnavailable:
+      description: Sidecar inaccessible
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
